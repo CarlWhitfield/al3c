@@ -16,10 +16,10 @@ int check_mpirun() {
 
     while ((end_pos = path.find(':', start_pos)) != std::string::npos) {
 
-        std::string current_path =
-        path.substr(start_pos, end_pos - start_pos) + "/mpirun";
+        std::string current_path = path.substr(start_pos, end_pos - start_pos);
+		current_path += "/mpiexec";
 
-        if ((stat(current_path.c_str(), &sb) == 0) && (sb.st_mode & S_IXOTH)) {
+        if ((stat(current_path.c_str(), &sb) == 0) && (sb.st_mode & S_IEXEC)) {
           return 1;
         }
 

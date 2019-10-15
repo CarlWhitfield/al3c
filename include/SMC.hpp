@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 #include <float.h>
-#include <dlfcn.h>
+//#include <dlfcn.h>
 #include <iostream>
 #include <mpi.h>
 
@@ -80,8 +80,8 @@ public:
                 }
 
             current_epsilon=MAX(current_epsilon,terminal_epsilon);
-            } MPI::COMM_WORLD.Bcast(&current_epsilon,1,MPI::FLOAT,0);
-            MPI::COMM_WORLD.Bcast(current[0]->d,size_of_mem*A,MPI::CHAR,0);
+            } MPI_Bcast(&current_epsilon,1,MPI_FLOAT,0,MPI_COMM_WORLD);
+            MPI_Bcast(current[0]->d,size_of_mem*A,MPI_CHAR,0,MPI_COMM_WORLD);
 
     }
 
@@ -103,14 +103,14 @@ public:
                         perturb_scales);
         }
         for (uint r=0;r<NP;r++) { //need to broadcast the above matrices..
-            MPI::COMM_WORLD.Bcast(prior_density_vector+A_per_proc*r,A_per_proc,\
-                    MPI::FLOAT, r);
-            MPI::COMM_WORLD.Bcast(perturb_density_matrix+A_per_proc*A*r, \
-                    A_per_proc*A,MPI::FLOAT, r);
-        } MPI::COMM_WORLD.Allreduce(&prior_scales,&prior_scale,1,\
-                MPI::FLOAT,MPI_MAX);
-        MPI::COMM_WORLD.Allreduce(&perturb_scales,&perturb_scale,1,MPI::FLOAT,\
-                MPI_MAX);
+            MPI_Bcast(prior_density_vector+A_per_proc*r,A_per_proc,\
+                    MPI_FLOAT, r, MPI_COMM_WORLD);
+            MPI_Bcast(perturb_density_matrix+A_per_proc*A*r, \
+                    A_per_proc*A,MPI_FLOAT, r, MPI_COMM_WORLD);
+        } MPI_Allreduce(&prior_scales,&prior_scale,1,\
+                MPI_FLOAT,MPI_MAX,MPI_COMM_WORLD);
+        MPI_Allreduce(&perturb_scales,&perturb_scale,1,MPI_FLOAT,\
+                MPI_MAX,MPI_COMM_WORLD);
 
         if (perturb_scale==0)
             perturb_scale=1;
@@ -136,9 +136,8 @@ public:
             *(current[np*A_per_proc+a]->w)/=sum_weight;
         }
         for (uint r=0;r<NP;r++)
-            MPI::COMM_WORLD.Bcast(\
-                    current[A_per_proc*r]->d,size_of_mem*A_per_proc, \
-                    MPI::CHAR,r);
+            MPI_Bcast(current[A_per_proc*r]->d,size_of_mem*A_per_proc,
+			          MPI_CHAR,r,MPI_COMM_WORLD);
 
         delete [] perturb_density_matrix;
         delete [] prior_density_vector;
@@ -191,7 +190,7 @@ public:
 
     uint set_size_of_mem () {
 
-        framework_t<param_t> *tmp_t=user_type(NULL,NULL,0,0,NULL);
+        framework_t<param_t> *tmp_t= user_type(NULL,NULL,0,0,NULL);
                 // d        w        param                        S
         size_of_mem=sizeof(float)+sizeof(float)+tmp_t->size_of_param_t+\
                     (N)*(D)*sizeof(float);
@@ -268,8 +267,8 @@ public:
         }
 
         for (uint r=0;r<NP;r++)
-            MPI::COMM_WORLD.Bcast(last[A_per_proc*r]->d,\
-                    size_of_mem*A_per_proc, MPI::CHAR,r);
+            MPI_Bcast(last[A_per_proc*r]->d,\
+                    size_of_mem*A_per_proc, MPI_CHAR,r, MPI_COMM_WORLD);
 
         uint *t0=new uint[NP]();
 
@@ -300,9 +299,9 @@ public:
             for (uint r=0;r<NP;r++) {//can't point to ->d because that won't
                                      // necessarily be at the start 
                                      // (since we sorted the pointers)
-                MPI::COMM_WORLD.Bcast(proposed_data+\
+                MPI_Bcast(proposed_data+\
                         T_per_proc*r*size_of_mem,T_per_proc*size_of_mem,\
-                        MPI::CHAR,r);
+                        MPI_CHAR,r, MPI_COMM_WORLD);
             }
             last_epsilon=current_epsilon;
 
@@ -351,7 +350,7 @@ public:
         d=0, D=0, n=0, cheat=0,cheat=0;
         last_epsilon=FLT_MAX, current_epsilon=FLT_MAX,x=0,sum_weight=0;
 
-        output_prefix=strdup(config->first_node("output")->\
+        output_prefix=_strdup(config->first_node("output")->\
                 first_node("prefix")->value());
 
         if(!config->first_node("ABC")->first_node("T")) {
@@ -477,25 +476,25 @@ public:
             exit(EXIT_FAILURE);
         }
 
-        O_string=strdup(config->first_node("O")->value());
-        line=strtok_r(O_string,"\n",&ptr_b);
+        O_string=_strdup(config->first_node("O")->value());
+        line=strtok_s(O_string,"\n",&ptr_b);
 
         if (line[0]=='#')
             N=0;
         else {
             N=1;
-            strtok_r(line,DELIM,&ptr_c);
+            strtok_s(line,DELIM,&ptr_c);
             D=1;
 
-            while(strtok_r(NULL,DELIM,&ptr_c))
+            while(strtok_s(NULL,DELIM,&ptr_c))
                 D++;
         }
-        while ((line=strtok_r(NULL,"\n",&ptr_b)))
+        while ((line=strtok_s(NULL,"\n",&ptr_b)))
             if (line[0]!='#') {
                 if (N==1) {
-                    strtok_r(line,DELIM,&ptr_c);
+                    strtok_s(line,DELIM,&ptr_c);
                     D=1;
-                    while(strtok_r(NULL,DELIM,&ptr_c))
+                    while(strtok_s(NULL,DELIM,&ptr_c))
                         D++;
                 }
                 N++;
@@ -504,18 +503,18 @@ public:
         O=new float*[N];
         free(O_string);
         O_string=config->first_node("O")->value();
-        line=strtok_r(O_string,"\n",&ptr_b);
+        line=strtok_s(O_string,"\n",&ptr_b);
         n=0;
 
         while(1) {
             if (line[0]!='#') {
                 O[n]=new float[D];
-                O[n][0]=atof(strtok_r(line,DELIM,&ptr_c));
-                for (d=1;(ptr_a=strtok_r(NULL,DELIM,&ptr_c))!=NULL;d++)
+                O[n][0]=atof(strtok_s(line,DELIM,&ptr_c));
+                for (d=1;(ptr_a=strtok_s(NULL,DELIM,&ptr_c))!=NULL;d++)
                     O[n][d]=atof(ptr_a);
                 n++;
             }
-            if (!(line=strtok_r(NULL,"\n",&ptr_b)))
+            if (!(line=strtok_s(NULL,"\n",&ptr_b)))
                 break;
         }
 
@@ -539,13 +538,13 @@ public:
             } std::cerr<<std::endl;
         }
 
-        if(!config->first_node("lib")) {
+        /*if(!config->first_node("lib")) {
             std::cerr<<"Error! Could not find required <lib></lib> in XML file"\
                 <<std::endl;
             exit(EXIT_FAILURE);
-        }
+        }*/
 
-        char *lib_string=config->first_node("lib")->value();
+        /*char *lib_string=config->first_node("lib")->value();
 
         if (np==0)
             std::cerr<<"Loading '"<<lib_string<<"' shared library...";
@@ -557,28 +556,28 @@ public:
             std::cerr << "Cannot open library: " << dlerror() << '\n';
             exit(EXIT_FAILURE);
 
-        }
+        }*/
 
-        user_type=(create_t*)dlsym(handle,"create");
+        /*user_type=(create_t*)dlsym(handle,"create");
         dlsym_error = dlerror();
         if (dlsym_error) {
 
             std::cerr << "Cannot load symbol: '" << dlsym_error << "'\n";
             exit(EXIT_FAILURE);
 
-        }
+        }*/
 
-        destroy_user_type=(destroy_t*)dlsym(handle,"destroy");
+        /*destroy_user_type=(destroy_t*)dlsym(handle,"destroy");
         dlsym_error = dlerror();
         if (dlsym_error) {
 
             std::cerr << "Cannot load symbol: '" << dlsym_error << "'\n";
             exit(EXIT_FAILURE);
 
-        }
+        }*/
 
 
-        user_summary_type=(create_summary_t*)dlsym(handle,"create_summary");
+        /*user_summary_type=(create_summary_t*)dlsym(handle,"create_summary");
         dlsym_error = dlerror();
 
         if (dlsym_error) {
@@ -597,18 +596,20 @@ public:
             }
 
         if (np==0)
-            std::cerr<<" done"<<std::endl;
+            std::cerr<<" done"<<std::endl;*/
+		user_type = (create_t*) create;
+		destroy_user_type = (destroy_t*) destroy;
+		user_summary_type = (create_summary_t*) create_summary;
+		destroy_user_summary_type = (destroy_summary_t*) destroy_summary;
 
         last=new framework_t<param_t>*[A], \
              current=new framework_t<param_t>*[A], \
              proposed=new framework_t<param_t>*[T];
 
-        last_params=new param_t*[A];
+        last_params=new param_t* [A];
 
         last_summary=user_summary_type(last_params,A);
-
         set_size_of_mem();
-
         last_data=new char[size_of_mem*A](), \
                   current_data=new char[size_of_mem*A](), \
                   proposed_data=new char[size_of_mem*T]() ;
@@ -623,11 +624,12 @@ public:
                         last_summary->summary,N,D,O);
             }
         }
+		
     }
 
     ~SMC_t() {
 
-        dlclose(handle);
+        //dlclose(handle);
 
         free(output_prefix);
 

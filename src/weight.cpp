@@ -13,7 +13,7 @@ float calc_max_weight(framework_t<param_t> **accepted, uint A_per_proc, uint np 
     for (uint a=0;a<A_per_proc;a++) {
         max_weights=MAX(*(accepted[np*A_per_proc+a]->w),max_weights);
     }
-    MPI::COMM_WORLD.Allreduce(&max_weights,&max_weight,1,MPI::FLOAT,MPI_MAX);
+    MPI_Allreduce(&max_weights,&max_weight,1,MPI_FLOAT,MPI_MAX,MPI_COMM_WORLD);
 
     return max_weight;
 }
@@ -24,7 +24,7 @@ float calc_sum_weight(framework_t<param_t> **current, uint A_per_proc, uint np) 
     for (uint a=0;a<A_per_proc;a++) {
         sum_weights+=*(current[np*A_per_proc+a]->w);
     }
-    MPI::COMM_WORLD.Allreduce(&sum_weights,&sum_weight,1,MPI::FLOAT,MPI_SUM);
+    MPI_Allreduce(&sum_weights,&sum_weight,1,MPI_FLOAT,MPI_SUM,MPI_COMM_WORLD);
 
     return sum_weight;
 

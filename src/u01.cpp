@@ -1,7 +1,7 @@
 #include <iostream>
 
 #include "SFMT/SFMT.h"
-
+#include<time.h>
 #include "../include/u01.hpp"
 
 uint64_t u01n;
