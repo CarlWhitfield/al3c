@@ -6,7 +6,7 @@
 //#include <dlfcn.h>
 #include <iostream>
 #include <mpi.h>
-
+#include <vector>
 #include "../src/rapidxml/rapidxml_print.hpp"
 
 #include "externs_typedefs.hpp"
@@ -43,7 +43,7 @@ public:
 
     uint d,D, n,N,g,G,T, T_per_proc,A, A_per_proc, *R, cheat, sample;
 
-    float **O,*E, last_epsilon, current_epsilon, terminal_epsilon,x,sum_weight,\
+    float **O, **DistWeights, *E, last_epsilon, current_epsilon, terminal_epsilon,x,sum_weight,\
         max_weight;
     char *output_prefix, *ptr_a,*ptr_b,*ptr_c,*line, *O_string;
 
@@ -67,7 +67,7 @@ public:
                         memcpy(current[a]->d,proposed[t]->d,size_of_mem);
                         a++;
                     }
-
+				//M is not being copied for some reason
                 current_epsilon=last_epsilon;
                 if (G==0) {
                     if (R[0])
@@ -178,22 +178,22 @@ public:
 
         if (np==0) {
 
-            std::cerr<<"\rgeneration="<<g<<"/"<<G<<", epsilon="<<\
+            std::cerr<<"generation="<<g<<"/"<<G<<", epsilon="<<\
                 current_epsilon<<", simulations=("<<_t[0]<<"/"<<T_per_proc;
 
             for (uint r=1;r<NP;r++) {
                 std::cerr<<","<<_t[r]<<"/"<<T_per_proc;
             }
-            std::cerr<<")...";
+            std::cerr<<")..."<<std::endl;
         }
     }
 
     uint set_size_of_mem () {
 
-        framework_t<param_t> *tmp_t= user_type(NULL,NULL,0,0,NULL);
-                // d        w        param                        S
+        framework_t<param_t> *tmp_t= user_type(NULL,NULL,0,0,NULL,NULL);
+                // d        w        param                        S   
         size_of_mem=sizeof(float)+sizeof(float)+tmp_t->size_of_param_t+\
-                    (N)*(D)*sizeof(float);
+                    (N)*(D)*sizeof(float) + 3*sizeof(float);
         destroy_user_type(tmp_t);
 
         return size_of_mem;
@@ -219,6 +219,19 @@ public:
 
         print_progress(t);
 
+		//object to store sums of simulated data from each run locally for each processor
+		std::vector<float> **results;
+		results = new std::vector<float>*[this->N];
+		for(uint i_n = 0; i_n < this->N; i_n++)
+		{
+			results[i_n] = new std::vector<float>[this->D];
+			for(uint i_d = 0; i_d < this->D; i_d++)
+			{
+				results[i_n][i_d].reserve(T_per_proc);
+			}
+		}		
+
+		uint sim_count = 0;
         for (;t[np]<T_per_proc;t[np]++) {
 
             repeat:
@@ -241,34 +254,161 @@ public:
 
             proposed[np*T_per_proc+t[np]]->simulate();
 
+			//----Carl's code-----//
+			//regardless of whether accepted or not, use to calculate new weights
+			sim_count++;
+			for(uint i_n = 0; i_n < this->N; i_n++)
+			{
+				for(uint i_d = 0; i_d < this->D; i_d++)
+				{
+					results[i_n][i_d].push_back(proposed[np*T_per_proc+t[np]]->S[i_n][i_d]);
+				}
+			}
+			//-------------------//
 
             if ( (*(proposed[np*T_per_proc+t[np]]->d)=\
                         proposed[np*T_per_proc+t[np]]->distance() ) > \
                         current_epsilon)
                 goto repeat;
 
-        }
+		}
 
-        //one last print...
-        print_progress(t);
+		//------------------Carl's code------------------//
+		int *recvcounts = NULL;
+		int totlen = 0;
+		if(np == 0)
+		{
+			recvcounts = new int[NP];   
+		}
+		//gather sim counts
+		MPI_Gather(&sim_count, 1, MPI_INT, recvcounts, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		//total sim counts
+		MPI_Reduce(&sim_count, &totlen, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);	
+
+		int *displs = NULL;
+		
+		if(np==0) //only do this on root node
+		{
+			displs = new int [NP];
+			displs[0] = 0;
+			for(uint i_r = 1; i_r < NP; i_r++)
+			{
+				displs[i_r] = displs[i_r-1] + recvcounts[i_r-1];   //displs contains cumulative sizes  
+			}
+		}
+		std::vector<float> **all_results;
+		all_results = new std::vector<float>*[this->N];
+		for(uint i_n = 0; i_n < this->N; i_n++)
+		{
+			all_results[i_n] = new std::vector<float>[this->D];
+			for(uint i_d = 0; i_d < this->D; i_d++)
+			{
+				if(np==0) all_results[i_n][i_d].resize(totlen);
+			}
+		}
+
+		//gather all results
+		for(uint i_n = 0; i_n < this->N; i_n++)
+		{
+			for(uint i_d = 0; i_d < this->D; i_d++)
+			{
+				MPI_Gatherv(results[i_n][i_d].data(), sim_count, MPI_FLOAT, 
+					        all_results[i_n][i_d].data(), recvcounts, displs, MPI_FLOAT,
+							0, MPI_COMM_WORLD);
+
+				//sort all results
+				if(np==0)
+				{
+					//in ascending order
+					std::sort(all_results[i_n][i_d].data(), all_results[i_n][i_d].data()+totlen, std::less<float>());
+					//find median
+					float median;
+					if(totlen%2 == 0)
+					{
+						median = float(0.5)*(all_results[i_n][i_d][totlen/2] + all_results[i_n][i_d][totlen/2-1]);
+					}
+					else
+					{
+						median = all_results[i_n][i_d][(totlen-1)/2];
+					}
+					std::vector<float> abs_med_dist;
+					abs_med_dist.resize(totlen);
+					for(size_t i_sim = 0; i_sim < totlen; i_sim++)
+					{
+						abs_med_dist[i_sim] = fabs(all_results[i_n][i_d][i_sim] - median);
+					}
+					//Distance weights are median absolute distances
+					std::sort(abs_med_dist.data(), abs_med_dist.data() + abs_med_dist.size(), std::less<float>());
+					if(totlen%2 == 0)
+					{
+						DistWeights[i_n][i_d] = 0.5*(abs_med_dist[totlen/2] + abs_med_dist[totlen/2-1]);
+					}
+					else
+					{
+						DistWeights[i_n][i_d] = abs_med_dist[(totlen-1)/2];
+					}
+					if(DistWeights[i_n][i_d] == 0)
+					{
+						DistWeights[i_n][i_d] = abs_med_dist[totlen-1];
+					}
+					if(DistWeights[i_n][i_d] == 0)
+					{
+						DistWeights[i_n][i_d] = 1.0;
+					}
+				}
+			}
+			MPI_Bcast(DistWeights[i_n],this->D,MPI_FLOAT,0,MPI_COMM_WORLD);
+		}
+		//Distweights now update
+		//recalculate distances for proposed sims (even though they were accepted on old distances)
+		for(uint i_a = 0; i_a < T_per_proc; i_a++)
+		{
+			*(proposed[np*T_per_proc + i_a]->d) = proposed[np*T_per_proc + i_a]->distance();
+		}
+		//--------------------------------------------------------------//
 
         MPI_Barrier(MPI_COMM_WORLD);
+
+		//one last print...
+        print_progress(t);
+
+		//clean up
+		//delete everything
+		for(uint i_n = 0; i_n < this->N; i_n++)
+		{
+			delete [] results[i_n];
+		}
+		delete [] results;
+
+		if(np==0)
+		{
+			for(uint i_n = 0; i_n < this->N; i_n++)
+			{
+				delete [] all_results[i_n];
+			}
+			delete [] all_results;
+			delete [] recvcounts;
+			delete [] displs;
+		}
 
         delete [] t;
     }
 
 //enter our loop of SMC...
-    void loop() {
-
-        for (uint a=0;a<A_per_proc;a++) {
-            last[np*A_per_proc+a]->prior();
-            *(last[np*A_per_proc+a]->w)=1/(float)A;
-            *(last[np*A_per_proc+a]->d)=-1.f; // let -1 mean "not simulated"
-        }
+    void loop() 
+	{
+		for (uint a=0;a<A_per_proc;a++) 
+		{
+			last[np*A_per_proc+a]->prior();  //generate params from prior
+			*(last[np*A_per_proc+a]->w)=1/(float)A;
+			*(last[np*A_per_proc+a]->d)=-1.f; // let -1 mean "not simulated"
+		}
 
         for (uint r=0;r<NP;r++)
-            MPI_Bcast(last[A_per_proc*r]->d,\
-                    size_of_mem*A_per_proc, MPI_CHAR,r, MPI_COMM_WORLD);
+		{
+            MPI_Bcast(last[A_per_proc*r]->d, size_of_mem*A_per_proc, 
+				      MPI_CHAR,r, MPI_COMM_WORLD);
+		}
 
         uint *t0=new uint[NP]();
 
@@ -290,11 +430,27 @@ public:
             for (uint t=0;t<T;t++) {
                 destroy_user_type(proposed[t]);
                 proposed[t]=user_type(proposed_data+size_of_mem*t, \
-                        last_summary->summary,N,D,O);
+                                      last_summary->summary,N,D,O,DistWeights);
             }
 
-
             generate();
+
+			//--------------------------Carl's code---------------------------//
+			if(np==0)
+			{
+				//print dist weights before
+				std::cerr << "Dist weights after update:" << std::endl;
+				for(uint i_n = 0; i_n < this->N; i_n++)
+				{
+					for(uint i_d = 0; i_d < this->D; i_d++)
+					{
+						if(i_d > 0) std::cerr << ", ";
+						std::cerr << DistWeights[i_n][i_d];
+					}
+					std::cerr << std::endl;
+				}
+			}  //double check these are broadcasted to all nodes
+			//--------------------------------------------------------------//
 
             for (uint r=0;r<NP;r++) {//can't point to ->d because that won't
                                      // necessarily be at the start 
@@ -345,7 +501,7 @@ public:
     }
 
     SMC_t(rapidxml::xml_document<> *config) {
-        std::cerr<<"testing the constructor..."<<std::endl;
+        std::cerr<<"testing the constructor on node..."<< np <<std::endl;
 
         d=0, D=0, n=0, cheat=0,cheat=0;
         last_epsilon=FLT_MAX, current_epsilon=FLT_MAX,x=0,sum_weight=0;
@@ -501,17 +657,24 @@ public:
             }
 
         O=new float*[N];
+		DistWeights=new float*[N];
         free(O_string);
         O_string=config->first_node("O")->value();
         line=strtok_s(O_string,"\n",&ptr_b);
         n=0;
 
         while(1) {
-            if (line[0]!='#') {
+            if (line[0]!='#') 
+			{
                 O[n]=new float[D];
+				DistWeights[n]=new float[D];
                 O[n][0]=atof(strtok_s(line,DELIM,&ptr_c));
+				DistWeights[n][0] = float(1.0);
                 for (d=1;(ptr_a=strtok_s(NULL,DELIM,&ptr_c))!=NULL;d++)
+				{
                     O[n][d]=atof(ptr_a);
+					DistWeights[n][d] = float(1.0);   //initially distance weights are all 1
+				}
                 n++;
             }
             if (!(line=strtok_s(NULL,"\n",&ptr_b)))
@@ -526,7 +689,7 @@ public:
 
         //use dlopen to open the user provided library & check we have what we 
         //need
-
+		MPI_Barrier(MPI_COMM_WORLD);   //before printing wait for all to finish
         if (np==0) {
             std::cerr<<"Observed data is a(n) "<<N<<"x"<<D<<\
                 " matrix, as follows:"<<std::endl<<std::endl;
@@ -536,6 +699,17 @@ public:
                     std::cerr<<"\t"<<O[n][d];
                 std::cerr<<std::endl;
             } std::cerr<<std::endl;
+			//print initial dist weights
+			//std::cerr << "Initial dist weights before update:" << std::endl;
+			//for(uint i_n = 0; i_n < N; i_n++)
+			//{
+			//	for(uint i_d = 0; i_d < D; i_d++)
+			//	{
+			//		if(i_d > 0) std::cerr << ", ";
+			//		std::cerr << DistWeights[i_n][i_d];
+			//	}
+			//	std::cerr << std::endl;
+			//}
         }
 
         /*if(!config->first_node("lib")) {
@@ -602,9 +776,9 @@ public:
 		user_summary_type = (create_summary_t*) create_summary;
 		destroy_user_summary_type = (destroy_summary_t*) destroy_summary;
 
-        last=new framework_t<param_t>*[A], \
-             current=new framework_t<param_t>*[A], \
-             proposed=new framework_t<param_t>*[T];
+        last=new framework_t<param_t>*[A];
+        current=new framework_t<param_t>*[A];
+        proposed=new framework_t<param_t>*[T];
 
         last_params=new param_t* [A];
 
@@ -616,12 +790,12 @@ public:
 
         for (uint t=0;t<T;t++) {
             proposed[t]=user_type(proposed_data+size_of_mem*t, \
-                    last_summary->summary,N,D,O);
+                    last_summary->summary,N,D,O,DistWeights);
             if (t<A) {
                 current[t]=user_type(current_data+size_of_mem*t,\
-                        last_summary->summary,N,D,O);
+                        last_summary->summary,N,D,O,DistWeights);
                 last[t]=user_type(last_data+size_of_mem*t,\
-                        last_summary->summary,N,D,O);
+                        last_summary->summary,N,D,O,DistWeights);
             }
         }
 		
@@ -645,8 +819,12 @@ public:
             }
         }
         for (uint i=0;i<N;i++)
-            delete [] O[i];
+        {
+			delete [] O[i];
+			delete [] DistWeights[i];
+		}
         delete [] O;
+		delete [] DistWeights;
 
         delete [] proposed;
         delete [] current;

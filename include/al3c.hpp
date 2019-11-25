@@ -14,10 +14,11 @@ public:
 
     //these are constantly evolving & copied when parameters move...
     float *d, *w, **S;
+	float *M;   //for storing MRI results
     param_t *param;
 
     // these stay static and are just pointers to one location per processor
-    float **O;
+    float **O, **DistWeights;
     uint N, D;
 
     param_summary_t *param_summary;
@@ -112,10 +113,10 @@ class user_summary_t:public framework_summary_t<param_summary_t> {
 
 };
 
+
 class user_t:public framework_t<param_t> {
 
     public:
-
         void prior();
         float prior_density();
         void perturb();
@@ -125,11 +126,12 @@ class user_t:public framework_t<param_t> {
         void print(std::ofstream& output,bool header);
 
         user_t(char *ptr, param_summary_t *ss_ptr,uint N_xml, uint D_xml, \
-                float **O_xml) { // this is our constructor, allocates properly
+                float **O_xml, float **DW) { // this is our constructor, allocates properly
             size_of_param_t=find_size_of_param_t();
             N=N_xml;
             D=D_xml;
             O=O_xml;
+			DistWeights=DW;
             param_summary=ss_ptr;
 
             d=reinterpret_cast<float *>(ptr); //MUST HAVE d AS THE FIRST...
@@ -144,6 +146,10 @@ class user_t:public framework_t<param_t> {
                 S[n]=reinterpret_cast<float *>( ptr+sizeof(float)\
                         +sizeof(float)+find_size_of_param_t()+\
                         (D)*sizeof(float)*n );
+
+			M = reinterpret_cast<float *>(ptr+sizeof(float)\
+                        +sizeof(float)+find_size_of_param_t()+\
+                        (D)*(N)*sizeof(float));
         }
 
         virtual ~user_t() {
@@ -154,7 +160,7 @@ class user_t:public framework_t<param_t> {
 
 // the types of the class factories
 typedef framework_t<param_t>* create_t(char *ptr, param_summary_t *ss_ptr,\
-        uint N_xml, uint D_xml, float **O_xml);
+        uint N_xml, uint D_xml, float **O_xml, float **DW);
 typedef void destroy_t(framework_t<param_t>* user);
 typedef framework_summary_t<param_summary_t>* create_summary_t(param_t \
         **params, uint A);
@@ -162,8 +168,8 @@ typedef void destroy_summary_t(framework_summary_t<param_summary_t>* user_summar
 
 #ifndef    AL3C
     extern "C" framework_t<param_t>* create(char *ptr, param_summary_t *ss_ptr,\
-            uint N_xml, uint D_xml, float **O_xml) {
-        return new user_t(ptr,ss_ptr,N_xml,D_xml,O_xml);
+            uint N_xml, uint D_xml, float **O_xml, float **DW) {
+        return new user_t(ptr,ss_ptr,N_xml,D_xml,O_xml,DW);
     }
     extern "C" void destroy(user_t *user) {
         delete user;
